@@ -31,7 +31,8 @@ import { AuthService } from '../../core/auth';
         border-bottom: 1px solid var(--border);
       }
       .brand {
-        font-family: 'Anton', sans-serif;
+        font-family: 'Roboto', sans-serif;
+        font-weight: 900;
         font-size: 22px;
         letter-spacing: 0.5px;
       }
