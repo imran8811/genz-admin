@@ -1,5 +1,5 @@
 // Default (development) environment.
 export const environment = {
   production: false,
-  apiBaseUrl: 'http://localhost:8000/api',
+  apiBaseUrl: 'https://api.admin.genzfoods.pk/api',
 };
