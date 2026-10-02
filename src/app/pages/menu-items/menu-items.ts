@@ -87,6 +87,15 @@ import { Category, MenuItem, isDealGroup } from '../../core/models';
             <input name="name" [(ngModel)]="f.name" required />
           </div>
           <div class="field">
+            <label>Slug</label>
+            @if (current().slug; as slug) {
+              <input [value]="slug" disabled title="A slug is permanent once the item exists" />
+            } @else {
+              <input name="slug" [(ngModel)]="f.slug" [placeholder]="slugify(f.name) || 'generated from the name'" />
+              <small class="muted">Permanent once saved. Leave blank to use the placeholder; set one if that slug is taken.</small>
+            }
+          </div>
+          <div class="field">
             <label>Description</label>
             <textarea name="desc" rows="2" [(ngModel)]="f.description"></textarea>
           </div>
@@ -132,11 +141,25 @@ import { Category, MenuItem, isDealGroup } from '../../core/models';
               </div>
               <div class="field">
                 <label>Choose from</label>
-                <select multiple class="multi" [(ngModel)]="f.selFrom" name="selfrom">
-                  @for (opt of pickableItems(); track opt.slug) {
-                    <option [value]="opt.slug">{{ opt.name }}</option>
+                <div class="pick">
+                  @for (g of pickableGroups(); track g.cat.slug) {
+                    <details [open]="openGroups.has(g.cat.slug)">
+                      <summary>
+                        <span class="pick-name">{{ g.cat.name }}</span>
+                        <span class="muted">{{ selectedIn(g.items) }}/{{ g.items.length }}</span>
+                        <button type="button" class="btn btn-ghost btn-sm" (click)="toggleGroup(g.items, $event)">
+                          {{ selectedIn(g.items) === g.items.length ? 'None' : 'All' }}
+                        </button>
+                      </summary>
+                      @for (opt of g.items; track opt.slug) {
+                        <label class="chk">
+                          <input type="checkbox" [checked]="f.selFrom.includes(opt.slug)" (change)="toggleSel(opt.slug)" />
+                          {{ opt.name }}
+                        </label>
+                      }
+                    </details>
                   }
-                </select>
+                </div>
               </div>
             }
           }
@@ -276,8 +299,26 @@ import { Category, MenuItem, isDealGroup } from '../../core/models';
         display: flex;
         gap: 12px;
       }
-      .multi {
-        height: 130px;
+      .pick {
+        max-height: 260px;
+        overflow-y: auto;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 4px 10px;
+      }
+      .pick summary {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 0;
+        cursor: pointer;
+      }
+      .pick-name {
+        flex: 1;
+        font-weight: 600;
+      }
+      .pick .chk {
+        padding-left: 14px;
       }
       .row2 {
         display: flex;
@@ -334,11 +375,26 @@ export class MenuItemsComponent implements OnInit {
     // nothing at all.
     return cat ? this.allItems().filter((i) => Number(i.category_id) === Number(cat.id)) : [];
   });
-  /** Items a deal can let the customer choose from (non-deal categories). */
-  pickableItems = computed(() => {
-    const dealCatIds = new Set(this.categories().filter((c) => isDealGroup(c.slug)).map((c) => Number(c.id)));
-    return this.allItems().filter((i) => !dealCatIds.has(Number(i.category_id)));
-  });
+  /**
+   * What a deal can let the customer choose from: the non-deal categories, each with its items,
+   * both in menu order (categories arrive by sort_order; items are sorted here).
+   */
+  pickableGroups = computed(() =>
+    this.categories()
+      .filter((c) => !isDealGroup(c.slug))
+      .map((cat) => ({
+        cat,
+        items: this.allItems()
+          .filter((i) => Number(i.category_id) === Number(cat.id))
+          .sort((a, b) => a.sort_order - b.sort_order),
+      }))
+      .filter((g) => g.items.length > 0),
+  );
+  /**
+   * Picker groups expanded when the modal opens. Fixed at open time so that ticking an item
+   * never opens or closes a group under the user's cursor.
+   */
+  openGroups = new Set<string>();
 
   f = this.blank();
   isDeal = isDealGroup;
@@ -399,6 +455,11 @@ export class MenuItemsComponent implements OnInit {
   openNew(): void {
     this.current.set({});
     this.f = this.blank();
+    // Every pizza deal has the customer pick their pizzas, so open the picker
+    // (size / how many / choose from) up front instead of behind the checkbox.
+    const slug = this.activeSlug();
+    this.f.requiresSelection = isDealGroup(slug) && slug.includes('pizza');
+    this.initOpenGroups();
     this.error.set(null);
     this.editing.set(true);
   }
@@ -407,6 +468,7 @@ export class MenuItemsComponent implements OnInit {
     this.current.set(it);
     this.f = {
       name: it.name,
+      slug: it.slug,
       description: it.description ?? '',
       price: it.price,
       prices: { ...(it.prices ?? {}) },
@@ -420,12 +482,44 @@ export class MenuItemsComponent implements OnInit {
       selCount: it.pizza_selection?.count ?? 1,
       selFrom: it.pizza_selection?.from ?? [],
     };
+    this.initOpenGroups();
     this.error.set(null);
     this.editing.set(true);
   }
 
   cancel(): void {
     this.editing.set(false);
+  }
+
+  /**
+   * Expand the groups worth looking at first: any that already holds a pick, plus pizza
+   * categories when this is a pizza deal. If none qualify, expand everything rather than
+   * show a picker with every group closed.
+   */
+  private initOpenGroups(): void {
+    const pizzaDeal = this.activeSlug().includes('pizza');
+    const groups = this.pickableGroups();
+    const open = groups.filter(
+      (g) => this.selectedIn(g.items) > 0 || (pizzaDeal && g.cat.slug.includes('pizza')),
+    );
+    this.openGroups = new Set((open.length ? open : groups).map((g) => g.cat.slug));
+  }
+
+  selectedIn(items: MenuItem[]): number {
+    return items.filter((i) => this.f.selFrom.includes(i.slug)).length;
+  }
+
+  toggleSel(slug: string): void {
+    const from = this.f.selFrom;
+    this.f.selFrom = from.includes(slug) ? from.filter((s) => s !== slug) : [...from, slug];
+  }
+
+  /** All/None for one category; picks in other categories are left alone. */
+  toggleGroup(items: MenuItem[], ev: Event): void {
+    ev.preventDefault(); // the button sits in <summary>; don't also fold the group
+    const slugs = items.map((i) => i.slug);
+    const rest = this.f.selFrom.filter((s) => !slugs.includes(s));
+    this.f.selFrom = this.selectedIn(items) === items.length ? rest : [...rest, ...slugs];
   }
 
   save(): void {
@@ -467,6 +561,7 @@ export class MenuItemsComponent implements OnInit {
     }
 
     const slug = this.current().slug;
+    if (!slug && this.f.slug.trim()) payload.slug = this.slugify(this.f.slug);
     const req = slug ? this.api.updateItem(slug, payload) : this.api.createItem(payload);
     req.subscribe({
       next: () => {
@@ -497,9 +592,18 @@ export class MenuItemsComponent implements OnInit {
     });
   }
 
+  /** Lowercase-hyphen form, matching the API's Str::slug() for plain names. */
+  slugify(s: string): string {
+    return s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
   private blank() {
     return {
       name: '',
+      slug: '',
       description: '',
       price: null as number | null,
       prices: {} as Record<string, number | null>,

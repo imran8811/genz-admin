@@ -50,6 +50,8 @@ order of the menu on genz-web and genz-app.
 
 ## Conventions
 - Standalone components + signals; reuse the global tokens/classes in `src/styles.scss`.
-- `slug` is shown but **not editable** after creation (immutable shared identity).
+- `slug` is shown but **not editable** after creation (immutable shared identity). On create the
+  item modal has an optional Slug field. Left blank, the API derives the slug from the name. Fill it
+  in when that slug is taken, which happens after renames, e.g. "Deal 6" holds `deal-7`.
 - Image upload posts multipart to `/admin/{categories|menu-items}/{slug}/image`; the API normalizes
   to webp at a fixed path and the public feed cache-busts via `?v=`.
