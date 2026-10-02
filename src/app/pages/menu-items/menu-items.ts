@@ -486,9 +486,14 @@ export class MenuItemsComponent implements OnInit {
   }
 
   upload(it: MenuItem, ev: Event): void {
-    const file = (ev.target as HTMLInputElement).files?.[0];
+    const input = ev.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = ''; // let the same file be picked again after a failure
     if (!file) return;
-    this.api.uploadItemImage(it.slug, file).subscribe({ next: () => this.loadItems() });
+    this.api.uploadItemImage(it.slug, file).subscribe({
+      next: () => this.loadItems(),
+      error: (err) => alert(`Image upload failed: ${err?.error?.message ?? `HTTP ${err?.status}`}`),
+    });
   }
 
   private blank() {
