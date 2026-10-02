@@ -336,8 +336,8 @@ export class MenuItemsComponent implements OnInit {
   });
   /** Items a deal can let the customer choose from (non-deal categories). */
   pickableItems = computed(() => {
-    const dealCatIds = new Set(this.categories().filter((c) => isDealGroup(c.slug)).map((c) => c.id));
-    return this.allItems().filter((i) => !dealCatIds.has(i.category_id));
+    const dealCatIds = new Set(this.categories().filter((c) => isDealGroup(c.slug)).map((c) => Number(c.id)));
+    return this.allItems().filter((i) => !dealCatIds.has(Number(i.category_id)));
   });
 
   f = this.blank();
@@ -381,7 +381,8 @@ export class MenuItemsComponent implements OnInit {
   }
 
   img(it: MenuItem): string | null {
-    const cat = this.categories().find((c) => c.id === it.category_id);
+    // Numeric compare for the same string-id reason as items().
+    const cat = this.categories().find((c) => Number(c.id) === Number(it.category_id));
     return cat ? this.api.imageUrl(cat.slug, it.slug, it.image_updated_at) : null;
   }
 
