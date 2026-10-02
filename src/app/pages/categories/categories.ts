@@ -1,4 +1,4 @@
-import { Component, OnInit, signal } from '@angular/core';
+import { Component, OnInit, computed, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { MenuAdminService } from '../../core/menu-admin';
@@ -18,21 +18,89 @@ interface CatForm {
   template: `
     <header class="head">
       <h1>Categories</h1>
-      <button class="btn btn-primary" (click)="openNew()">+ New category</button>
+      <div class="head-actions">
+        @if (reordering()) {
+          <button class="btn btn-ghost" (click)="cancelReorder()" [disabled]="savingOrder()">
+            Cancel
+          </button>
+          <button
+            class="btn btn-primary"
+            (click)="saveOrder()"
+            [disabled]="savingOrder() || !orderDirty()"
+          >
+            {{ savingOrder() ? 'Saving…' : 'Save order' }}
+          </button>
+        } @else {
+          <button
+            class="btn btn-ghost"
+            (click)="startReorder()"
+            [disabled]="categories().length < 2"
+            title="Drag the categories into the order customers should see"
+          >
+            ⇅ Reorder
+          </button>
+          <button class="btn btn-primary" (click)="openNew()">+ New category</button>
+        }
+      </div>
     </header>
+
+    @if (reordering()) {
+      <p class="note">
+        Drag a tile, or use ◀ ▶, to set the order customers see on the menu. Nothing is saved until
+        you press <strong>Save order</strong>.
+      </p>
+    }
+    @if (orderError()) {
+      <p class="err">{{ orderError() }}</p>
+    }
 
     @if (loading()) {
       <p class="muted">Loading…</p>
     }
 
     <div class="grid">
-      @for (c of categories(); track c.slug) {
-        <div class="tile card" (click)="open(c)">
+      @for (c of categories(); track c.slug; let i = $index) {
+        <div
+          class="tile card"
+          [class.arranging]="reordering()"
+          [class.dragging]="dragIndex() === i"
+          [class.drop-target]="dragOverIndex() === i && dragIndex() !== i"
+          [attr.draggable]="reordering() ? true : null"
+          (click)="open(c)"
+          (dragstart)="onDragStart(i, $event)"
+          (dragover)="onDragOver(i, $event)"
+          (drop)="onDrop(i, $event)"
+          (dragend)="onDragEnd()"
+        >
           <div class="tile-head">
-            <h3>{{ c.name }}</h3>
+            <h3>
+              @if (reordering()) {
+                <span class="pos">{{ i + 1 }}</span>
+              }
+              {{ c.name }}
+            </h3>
             <div class="tile-actions" (click)="$event.stopPropagation()">
-              <button class="icon" title="Edit category" (click)="openEdit(c)">✎</button>
-              <button class="icon danger" title="Delete category" (click)="remove(c)">🗑</button>
+              @if (reordering()) {
+                <button
+                  class="icon"
+                  title="Move earlier"
+                  [disabled]="i === 0"
+                  (click)="move(i, i - 1)"
+                >
+                  ◀
+                </button>
+                <button
+                  class="icon"
+                  title="Move later"
+                  [disabled]="i === categories().length - 1"
+                  (click)="move(i, i + 1)"
+                >
+                  ▶
+                </button>
+              } @else {
+                <button class="icon" title="Edit category" (click)="openEdit(c)">✎</button>
+                <button class="icon danger" title="Delete category" (click)="remove(c)">🗑</button>
+              }
             </div>
           </div>
           <div class="meta muted">
@@ -44,7 +112,9 @@ interface CatForm {
               <span class="tag yellow">coming soon</span>
             }
           </div>
-          <span class="open-hint muted">Open →</span>
+          @if (!reordering()) {
+            <span class="open-hint muted">Open →</span>
+          }
         </div>
       } @empty {
         @if (!loading()) {
@@ -103,6 +173,22 @@ interface CatForm {
         align-items: center;
         margin-bottom: 22px;
       }
+      .head-actions {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      .note {
+        font-size: 13px;
+        color: var(--muted);
+        border: 1px dashed var(--border);
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 14px;
+      }
+      .note strong {
+        color: var(--text);
+      }
       .grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
@@ -121,6 +207,41 @@ interface CatForm {
       }
       .tile:active {
         transform: translateY(1px);
+      }
+      /* Arranging: the tile is a handle, not a link. */
+      .tile.arranging {
+        cursor: grab;
+      }
+      .tile.arranging:active {
+        cursor: grabbing;
+        transform: none;
+      }
+      .tile.dragging {
+        opacity: 0.4;
+      }
+      .tile.drop-target {
+        border-color: var(--yellow);
+        outline: 2px dashed var(--yellow);
+        outline-offset: 2px;
+      }
+      .pos {
+        display: inline-grid;
+        place-items: center;
+        min-width: 22px;
+        height: 22px;
+        margin-right: 6px;
+        padding: 0 5px;
+        border-radius: 6px;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        vertical-align: middle;
+      }
+      .icon:disabled {
+        opacity: 0.3;
+        cursor: not-allowed;
       }
       .tile-head {
         display: flex;
@@ -222,6 +343,35 @@ export class CategoriesComponent implements OnInit {
   current = signal<Category | Partial<Category>>({});
   form: CatForm = this.blank();
 
+  // ---- Reordering ----
+  // Off by default: the tiles are normally a navigation grid (click opens the
+  // category), and making them draggable all the time turns every slightly
+  // dragged click into an accidental reorder. The toggle swaps the grid into an
+  // arrange-only mode, where clicking a tile does nothing.
+  reordering = signal(false);
+  savingOrder = signal(false);
+  orderError = signal<string | null>(null);
+
+  /** The order the server last confirmed, for dirty-checking and Cancel. */
+  private readonly savedOrder = signal<string[]>([]);
+
+  /** Index being dragged, and the tile it is currently over. */
+  dragIndex = signal<number | null>(null);
+  dragOverIndex = signal<number | null>(null);
+
+  /**
+   * Moves are staged and written once by **Save order** — a drag is not an API
+   * call. Reordering four categories is four moves, and posting after each one
+   * would write three orders nobody asked for and leave the list half-arranged
+   * if one failed.
+   */
+  readonly orderDirty = computed(() => {
+    const now = this.categories().map((c) => c.slug);
+    const saved = this.savedOrder();
+
+    return now.length !== saved.length || now.some((s, i) => s !== saved[i]);
+  });
+
   constructor(
     private api: MenuAdminService,
     private router: Router,
@@ -235,16 +385,99 @@ export class CategoriesComponent implements OnInit {
     this.loading.set(true);
     this.api.categories().subscribe({
       next: (c) => {
+        // The API returns them by `sort_order`, so the array order *is* the
+        // order — the whole feature rests on not re-sorting it anywhere else.
         this.categories.set(c);
+        this.savedOrder.set(c.map((x) => x.slug));
         this.loading.set(false);
       },
       error: () => this.loading.set(false),
     });
   }
 
-  /** Open a category's items. */
+  /** Open a category's items. Inert while arranging — the tile is a handle then. */
   open(c: Category): void {
+    if (this.reordering()) return;
     this.router.navigate(['/category', c.slug]);
+  }
+
+  // ---- Reordering ----
+
+  startReorder(): void {
+    this.orderError.set(null);
+    this.reordering.set(true);
+  }
+
+  /** Put the list back the way the server has it and leave the mode. */
+  cancelReorder(): void {
+    const bySlug = new Map(this.categories().map((c) => [c.slug, c]));
+    this.categories.set(
+      this.savedOrder()
+        .map((slug) => bySlug.get(slug))
+        .filter((c): c is Category => !!c),
+    );
+    this.dragIndex.set(null);
+    this.dragOverIndex.set(null);
+    this.orderError.set(null);
+    this.reordering.set(false);
+  }
+
+  /** Move one tile to a new index, clamped. Used by both the arrows and drops. */
+  move(from: number, to: number): void {
+    const list = [...this.categories()];
+    if (from < 0 || from >= list.length || to < 0 || to >= list.length || from === to) return;
+    const [picked] = list.splice(from, 1);
+    list.splice(to, 0, picked);
+    this.categories.set(list);
+  }
+
+  onDragStart(index: number, ev: DragEvent): void {
+    this.dragIndex.set(index);
+    // Firefox refuses to start a drag unless some data is set.
+    ev.dataTransfer?.setData('text/plain', String(index));
+    if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move';
+  }
+
+  onDragOver(index: number, ev: DragEvent): void {
+    if (this.dragIndex() === null) return;
+    // Without preventDefault the browser treats the tile as an invalid target
+    // and never fires a drop.
+    ev.preventDefault();
+    if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
+    this.dragOverIndex.set(index);
+  }
+
+  onDrop(index: number, ev: DragEvent): void {
+    ev.preventDefault();
+    const from = this.dragIndex();
+    if (from !== null) this.move(from, index);
+    this.onDragEnd();
+  }
+
+  onDragEnd(): void {
+    this.dragIndex.set(null);
+    this.dragOverIndex.set(null);
+  }
+
+  /** One POST with the whole list; the endpoint rewrites `sort_order` from it. */
+  saveOrder(): void {
+    const slugs = this.categories().map((c) => c.slug);
+    this.savingOrder.set(true);
+    this.orderError.set(null);
+    this.api.reorderCategories(slugs).subscribe({
+      next: () => {
+        this.savingOrder.set(false);
+        this.savedOrder.set(slugs);
+        this.reordering.set(false);
+        // Re-read: every `sort_order` on screen is now stale, and the server's
+        // order is the one the public menu feed will publish.
+        this.load();
+      },
+      error: (err) => {
+        this.savingOrder.set(false);
+        this.orderError.set(this.firstError(err) ?? 'Could not save the new order.');
+      },
+    });
   }
 
   openNew(): void {
